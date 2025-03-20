@@ -1,0 +1,12 @@
+[package]
+name = "agent"
+version = "0.0.1"
+edition = "2024"
+authors = ["markhenry.liwag@gmail.com"]
+
+[dependencies]
+actix-web = "4.10.2"
+once_cell = "1.21.1"
+serde = { version = "1.0.219",  features = ["derive"] }
+serde_json = { version = "1.0.140", features = ["preserve_order", "raw_value"] }
+user-agent-parser = "0.3.6"
