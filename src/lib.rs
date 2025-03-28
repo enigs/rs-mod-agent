@@ -127,11 +127,11 @@ impl UserAgent {
         Self::default()
     }
 
-    /// Creates a hash suitable for use as a family_id but with additional
-    /// device information for more specific device targeting.
+    /// Creates a hash suitable for use as a family_id by first normalizing the user agent data.
     ///
-    /// This function creates a deterministic hash incorporating browser,
-    /// OS, and device information for a more granular family_id.
+    /// This function first creates a normalized string representation of the user agent
+    /// that only includes non-empty components separated by pipes. This normalized
+    /// representation is then hashed.
     ///
     /// # Returns
     /// An Option containing a string representation of the hash (suitable for family_id),
@@ -139,44 +139,100 @@ impl UserAgent {
     pub fn hash(&self) -> Option<String> {
         use blake3::Hasher;
 
-        self.user_agent.as_ref().map(|ua| {
+        self.user_agent.as_ref().map(|ua_string| {
+            let normalized_ua = self.normalized_string_internal(ua_string);
+
+            // Hash the normalized representation
             let mut hasher = Hasher::new();
-            hasher.update(ua.as_bytes());
-
-            // Add OS info if available
-            if let Some(os) = &self.os.name {
-                hasher.update(os.as_bytes());
-            }
-
-            // Add device info if available
-            if let Some(device) = &self.device.name {
-                hasher.update(device.as_bytes());
-            }
-
-            let hex_hash = hasher.finalize().to_hex().to_string();
-
-            // Create a prefix with browser-os-device info
-            let browser = self.product.name.as_deref().unwrap_or("unk");
-            let os = self.os.name.as_deref().unwrap_or("unk");
-            let device = self.device.name.as_deref().unwrap_or("gen");
-
-            let prefix = format!(
-                "{:.2}-{:.2}-{:.2}",
-                browser.to_lowercase(),
-                os.to_lowercase(),
-                device.to_lowercase()
-            );
-
-            // Format: prefix-hash (ensure total ≤ 100 chars)
-            let full_id = format!("{}-{}", prefix, hex_hash);
-
-            // Trim if needed to fit within 100 char limit
-            if full_id.len() > 100 {
-                full_id[0..100].to_string()
-            } else {
-                full_id
-            }
+            hasher.update(normalized_ua.as_bytes());
+            hasher.finalize().to_hex().to_string()
         })
+    }
+
+    /// Returns the normalized string representation of the user agent.
+    ///
+    /// This function creates a normalized string that only includes
+    /// non-empty components separated by pipes.
+    ///
+    /// # Returns
+    /// An Option containing the normalized string representation,
+    /// or None if the user agent string is not available.
+    pub fn normalized_string(&self) -> Option<String> {
+        self.user_agent.as_ref().map(|ua_string| {
+            self.normalized_string_internal(ua_string)
+        })
+    }
+
+    // Internal helper method to create the normalized string
+    fn normalized_string_internal(&self, ua_string: &str) -> String {
+        // Normalize the Product (browser) component
+        let browser_parts: Vec<&str> = [
+            self.product.name.as_deref(),
+            self.product.major.as_deref(),
+            self.product.minor.as_deref(),
+            self.product.patch.as_deref()
+        ].into_iter()
+            .flatten()
+            .collect();
+
+        let browser_str = if !browser_parts.is_empty() {
+            browser_parts.join(".")
+        } else {
+            String::new()
+        };
+
+        // Normalize the OS component
+        let os_parts: Vec<&str> = [
+            self.os.name.as_deref(),
+            self.os.major.as_deref(),
+            self.os.minor.as_deref(),
+            self.os.patch.as_deref(),
+            self.os.patch_minor.as_deref()
+        ].into_iter()
+            .flatten()
+            .collect();
+
+        let os_str = if !os_parts.is_empty() {
+            os_parts.join(".")
+        } else {
+            String::new()
+        };
+
+        // Normalize the Device component
+        let device_parts: Vec<&str> = [
+            self.device.name.as_deref(),
+            self.device.brand.as_deref(),
+            self.device.model.as_deref()
+        ].into_iter()
+            .flatten()
+            .collect();
+
+        let device_str = if !device_parts.is_empty() {
+            device_parts.join(".")
+        } else {
+            String::new()
+        };
+
+        // Create normalized sections
+        let mut sections = Vec::new();
+
+        if !browser_str.is_empty() {
+            sections.push(browser_str);
+        }
+
+        if !os_str.is_empty() {
+            sections.push(os_str);
+        }
+
+        if !device_str.is_empty() {
+            sections.push(device_str);
+        }
+
+        // Always include the user agent string as the last section
+        sections.push(ua_string.to_string());
+
+        // Join sections with pipe character
+        sections.join("|")
     }
 }
 
