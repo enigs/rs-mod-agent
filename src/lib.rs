@@ -1,4 +1,5 @@
 use actix_web::{HttpMessage, HttpRequest};
+use blake3::Hasher;
 use once_cell::sync::OnceCell;
 use serde::{Serialize, Deserialize};
 use serde_json::Value;
@@ -12,6 +13,8 @@ pub static USER_AGENT_PARSER: OnceCell<UserAgentParser> = OnceCell::new();
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct UserAgent {
     pub ip: Option<String>,
+    pub fingerprint: Option<String>,
+    pub hash: Option<String>,
     pub product: Product,
     pub os: OS,
     pub device: Device,
@@ -101,6 +104,10 @@ where T: ToString
     user_agent.engine.minor = engine.minor.map(|item| item.to_string());
     user_agent.engine.patch = engine.patch.map(|item| item.to_string());
 
+    // Generate fingerprint and hash
+    user_agent.fingerprint = user_agent.fingerprint();
+    user_agent.hash = user_agent.hash();
+
     user_agent
 }
 
@@ -127,6 +134,173 @@ impl UserAgent {
         Self::default()
     }
 
+    /// Creates a robust fingerprint using multiple attributes of the user agent.
+    ///
+    /// The fingerprint combines various stable aspects of the user agent to create
+    /// a consistent identifier that is difficult to forge or debug.
+    ///
+    /// # Returns
+    /// An Option containing the fingerprint string, or None if insufficient data is available.
+    pub fn fingerprint(&self) -> Option<String> {
+        // Get the user agent string, using ? to return None if not available
+        let ua = self.user_agent.as_ref()?;
+
+        // Create feature vectors for different components
+        let mut feature_parts = Vec::new();
+
+        // Browser component with weighting factors
+        if let Some(browser_name) = &self.product.name {
+            // Add browser name with position marker
+            feature_parts.push(format!("b:{}", browser_name));
+
+            // Add version parts with more specific markers
+            if let Some(major) = &self.product.major {
+                feature_parts.push(format!("bv:{}", major));
+
+                if let Some(minor) = &self.product.minor {
+                    feature_parts.push(format!("bvm:{}.{}", major, minor));
+                }
+            }
+        }
+
+        // OS component with weighting factors
+        if let Some(os_name) = &self.os.name {
+            // Add OS name with position marker
+            feature_parts.push(format!("o:{}", os_name));
+
+            // Add version parts with more specific markers
+            if let Some(major) = &self.os.major {
+                feature_parts.push(format!("ov:{}", major));
+
+                if let Some(minor) = &self.os.minor {
+                    feature_parts.push(format!("ovm:{}.{}", major, minor));
+                }
+            }
+        }
+
+        // Device component
+        if let Some(device_name) = &self.device.name {
+            feature_parts.push(format!("d:{}", device_name));
+
+            if let Some(brand) = &self.device.brand {
+                feature_parts.push(format!("db:{}", brand));
+            }
+
+            if let Some(model) = &self.device.model {
+                feature_parts.push(format!("dm:{}", model));
+            }
+        }
+
+        // CPU architecture
+        if let Some(arch) = &self.cpu.architecture {
+            feature_parts.push(format!("c:{}", arch));
+        }
+
+        // Engine component
+        if let Some(engine_name) = &self.engine.name {
+            feature_parts.push(format!("e:{}", engine_name));
+
+            if let Some(major) = &self.engine.major {
+                feature_parts.push(format!("ev:{}", major));
+            }
+        }
+
+        // Add special signature components derived from the raw user agent
+        // Extract unique patterns from the user agent
+
+        // Length characteristics (highly stable)
+        feature_parts.push(format!("l:{}", ua.len()));
+
+        // Character distribution characteristics
+        let digits = ua.chars().filter(|c| c.is_ascii_digit()).count();
+        let symbols = ua.chars().filter(|c| !c.is_alphanumeric()).count();
+        feature_parts.push(format!("d:{}", digits));
+        feature_parts.push(format!("s:{}", symbols));
+
+        // Word pattern analysis (stable across same browser family)
+        let word_count = ua.split_whitespace().count();
+        feature_parts.push(format!("w:{}", word_count));
+
+        // Feature detection (browser capabilities)
+        if ua.contains("Mobile") {
+            feature_parts.push("fm:1".to_string());
+        }
+
+        if ua.contains("AppleWebKit") {
+            feature_parts.push("faw:1".to_string());
+        }
+
+        if ua.contains("Gecko") {
+            feature_parts.push("fg:1".to_string());
+        }
+
+        if ua.contains("Chrome") {
+            feature_parts.push("fc:1".to_string());
+        }
+
+        if ua.contains("Safari") && !ua.contains("Chrome") {
+            feature_parts.push("fs:1".to_string());
+        }
+
+        if ua.contains("Firefox") {
+            feature_parts.push("ff:1".to_string());
+        }
+
+        if ua.contains("Edge") || ua.contains("Edg/") {
+            feature_parts.push("fe:1".to_string());
+        }
+
+        if ua.contains("MSIE") || ua.contains("Trident") {
+            feature_parts.push("fi:1".to_string());
+        }
+
+        if ua.contains("Win") {
+            feature_parts.push("fow:1".to_string());
+        } else if ua.contains("Mac") {
+            feature_parts.push("fom:1".to_string());
+        } else if ua.contains("Linux") {
+            feature_parts.push("fol:1".to_string());
+        } else if ua.contains("Android") {
+            feature_parts.push("foa:1".to_string());
+        } else if ua.contains("iOS") || ua.contains("iPhone") || ua.contains("iPad") {
+            feature_parts.push("foi:1".to_string());
+        }
+
+        // Add IP subnet information if available (only use network portion for stability)
+        if let Some(ip) = &self.ip {
+            if ip.contains('.') {
+                // IPv4 address - use first two octets only (network portion)
+                let parts: Vec<&str> = ip.split('.').collect();
+                if parts.len() >= 2 {
+                    feature_parts.push(format!("ip4:{}.{}", parts[0], parts[1]));
+                }
+            } else if ip.contains(':') {
+                // IPv6 address - use first four segments only
+                let parts: Vec<&str> = ip.split(':').collect();
+                if parts.len() >= 4 {
+                    feature_parts.push(format!("ip6:{}", parts[0..4].join(":")));
+                }
+            }
+        }
+
+        // Sort to ensure consistent ordering
+        feature_parts.sort();
+
+        // Combine parts with a non-obvious separator
+        let features = feature_parts.join("&%&");
+
+        // Apply cryptographic hashing to create the final fingerprint
+        let mut hasher = Hasher::new();
+        hasher.update(features.as_bytes());
+
+        // Apply a secondary hash to make reverse-engineering more difficult
+        let primary_hash = hasher.finalize().to_hex().to_string();
+        let mut secondary_hasher = Hasher::new();
+        secondary_hasher.update(primary_hash.as_bytes());
+
+        Some(secondary_hasher.finalize().to_hex().to_string())
+    }
+
     /// Creates a hash suitable for use as a family_id by first normalizing the user agent data.
     ///
     /// This function first creates a normalized string representation of the user agent
@@ -137,8 +311,6 @@ impl UserAgent {
     /// An Option containing a string representation of the hash (suitable for family_id),
     /// or None if the user agent string is not available.
     pub fn hash(&self) -> Option<String> {
-        use blake3::Hasher;
-
         self.user_agent.as_ref().map(|ua_string| {
             let normalized_ua = self.normalized_string_internal(ua_string);
 
