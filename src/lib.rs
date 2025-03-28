@@ -126,6 +126,58 @@ impl UserAgent {
 
         Self::default()
     }
+
+    /// Creates a hash suitable for use as a family_id but with additional
+    /// device information for more specific device targeting.
+    ///
+    /// This function creates a deterministic hash incorporating browser,
+    /// OS, and device information for a more granular family_id.
+    ///
+    /// # Returns
+    /// An Option containing a string representation of the hash (suitable for family_id),
+    /// or None if the user agent string is not available.
+    pub fn hash(&self) -> Option<String> {
+        use blake3::Hasher;
+
+        self.user_agent.as_ref().map(|ua| {
+            let mut hasher = Hasher::new();
+            hasher.update(ua.as_bytes());
+
+            // Add OS info if available
+            if let Some(os) = &self.os.name {
+                hasher.update(os.as_bytes());
+            }
+
+            // Add device info if available
+            if let Some(device) = &self.device.name {
+                hasher.update(device.as_bytes());
+            }
+
+            let hex_hash = hasher.finalize().to_hex().to_string();
+
+            // Create a prefix with browser-os-device info
+            let browser = self.product.name.as_deref().unwrap_or("unk");
+            let os = self.os.name.as_deref().unwrap_or("unk");
+            let device = self.device.name.as_deref().unwrap_or("gen");
+
+            let prefix = format!(
+                "{:.2}-{:.2}-{:.2}",
+                browser.to_lowercase(),
+                os.to_lowercase(),
+                device.to_lowercase()
+            );
+
+            // Format: prefix-hash (ensure total ≤ 100 chars)
+            let full_id = format!("{}-{}", prefix, hex_hash);
+
+            // Trim if needed to fit within 100 char limit
+            if full_id.len() > 100 {
+                full_id[0..100].to_string()
+            } else {
+                full_id
+            }
+        })
+    }
 }
 
 /// Represents CPU architecture details.
