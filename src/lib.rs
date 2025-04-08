@@ -1,4 +1,6 @@
 use actix_web::{HttpMessage, HttpRequest};
+use actix_web::dev::ServiceRequest;
+use actix_web::http::header::USER_AGENT;
 use blake3::Hasher;
 use once_cell::sync::OnceCell;
 use serde::{Serialize, Deserialize};
@@ -111,6 +113,25 @@ where T: ToString
     user_agent
 }
 
+/// Parses user agent and IP address from a ServiceRequest into a `UserAgent` struct.
+///
+/// # Arguments
+/// - `req`: The Actix-web ServiceRequest.
+///
+/// # Returns
+/// A `UserAgent` struct containing parsed details.
+pub fn parse_from_request(req: &ServiceRequest) -> UserAgent {
+    let agent = req.headers()
+        .get(USER_AGENT)
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+
+    let ip = req.connection_info().peer_addr()
+        .unwrap_or("").to_string();
+
+    parse(agent, ip)
+}
 
 impl UserAgent {
     /// Creates a new default `UserAgent` instance.
