@@ -1,6 +1,6 @@
 use actix_web::{HttpMessage, HttpRequest};
 use actix_web::dev::ServiceRequest;
-use actix_web::http::header::USER_AGENT;
+use actix_web::http::header::{AUTHORIZATION, USER_AGENT};
 use blake3::Hasher;
 use once_cell::sync::OnceCell;
 use serde::{Serialize, Deserialize};
@@ -113,14 +113,14 @@ where T: ToString
     user_agent
 }
 
-/// Parses user agent and IP address from a ServiceRequest into a `UserAgent` struct.
+/// Parses user agent and IP address from a ServiceRequest into a tuple of (auth, UserAgent).
 ///
 /// # Arguments
 /// - `req`: The Actix-web ServiceRequest.
 ///
 /// # Returns
-/// A `UserAgent` struct containing parsed details.
-pub fn parse_from_request(req: &ServiceRequest) -> UserAgent {
+/// A tuple containing the authorization token as a String and a `UserAgent` struct with parsed details.
+pub fn parse_from_middleware(req: &ServiceRequest) -> (String, UserAgent) {
     let agent = req.headers()
         .get(USER_AGENT)
         .and_then(|h| h.to_str().ok())
@@ -130,7 +130,17 @@ pub fn parse_from_request(req: &ServiceRequest) -> UserAgent {
     let ip = req.connection_info().peer_addr()
         .unwrap_or("").to_string();
 
-    parse(agent, ip)
+    let auth = req.headers().get(AUTHORIZATION)
+        .map(|data| data.to_str().unwrap_or_default().to_string())
+        .unwrap_or_default()
+        .split_once(' ')
+        .map(|x| x.1)
+        .unwrap_or_default()
+        .to_string();
+
+    let user_agent = parse(agent, ip);
+
+    (auth, user_agent)
 }
 
 impl UserAgent {
